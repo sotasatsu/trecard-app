@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; manifest-src 'self'; frame-src https://script.google.com https://*.googleusercontent.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Trecard</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Trecard">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111417" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{--bg:#ffffff;--text:#1c1c1e;--sub:#6b6b70;--line:#e5e5ea;--accent:#1c1c1e;--accent-text:#ffffff;color-scheme:light}
+@media (prefers-color-scheme: dark){:root{--bg:#111417;--text:#ecf0f3;--sub:#a0a8b0;--line:#2a3035;--accent:#ecf0f3;--accent-text:#111417;color-scheme:dark}}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
+/* The embedded app cannot see the safe areas, so the frame is kept inside them. */
+#frame{position:fixed;top:env(safe-area-inset-top);left:env(safe-area-inset-left);right:env(safe-area-inset-right);bottom:env(safe-area-inset-bottom);width:calc(100% - env(safe-area-inset-left) - env(safe-area-inset-right));height:calc(100% - env(safe-area-inset-top) - env(safe-area-inset-bottom));border:0;background:var(--bg)}
+.panel{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--bg);z-index:2}
+[hidden]{display:none!important}
+.box{width:100%;max-width:420px}
+h1{font-size:20px;margin:0 0 12px}
+p{margin:0 0 12px;color:var(--sub)}
+ol{margin:0 0 16px;padding-left:1.3em}
+button{display:block;width:100%;min-height:48px;margin:10px 0 0;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit;font-weight:600}
+button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+.err{color:#c0392b;min-height:1.6em;margin:8px 0 0}
+</style>
+</head>
+<body>
+<iframe id="frame" title="Trecard" hidden referrerpolicy="no-referrer"></iframe>
+
+<section class="panel" id="loading" hidden><div class="box"><p>読み込み中…</p></div></section>
+
+<section class="panel" id="failed" hidden><div class="box">
+  <h1 id="failedTitle">開けませんでした</h1>
+  <p id="failedText">通信状態を確認して、再読み込みしてください。直らない場合は設定し直してください。</p>
+  <button class="primary" id="reloadBtn" type="button">再読み込み</button>
+  <button id="resetBtn" type="button">設定し直し</button>
+  <button id="dismissBtn" type="button" hidden>このまま使う</button>
+</div></section>
+
+<section class="panel" id="install" hidden><div class="box">
+  <h1>設定を保存しました</h1>
+  <ol>
+    <li>下の共有ボタン（□↑）を押す</li>
+    <li>「ホーム画面に追加」→「追加」</li>
+    <li>ホーム画面の Trecard アイコンから開く</li>
+  </ol>
+  <p>このページ（Safari）は閉じてかまいません。</p>
+  <button id="openHereBtn" type="button">Safari でこのまま開く</button>
+</div></section>
+
+<section class="panel" id="setup" hidden><div class="box">
+  <h1>Trecard の設定</h1>
+  <p>PC で用意した設定用 URL を貼り付けてください。</p>
+  <input id="setupInput" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="設定用 URL を貼り付け">
+  <p class="err" id="setupError"></p>
+  <button class="primary" id="setupSave" type="button">保存して開く</button>
+</div></section>
+
+<script>
+(function(){
+  "use strict";
+  var STORE="trecard.app.config";          // {u: Web App URL, k: access key, c: setup code}
+  var IGNORED="trecard.app.ignoredSetup";   // setup code the user chose to replace
+  var READY_TIMEOUT_MS=25000;
+  var URL_RE=/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{10,200}\/exec$/;
+  var KEY_RE=/^[A-Za-z0-9_-]{32,256}$/;
+  var FRAME_ORIGIN_RE=/^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
+  var $=function(id){return document.getElementById(id)};
+  var standalone=window.navigator.standalone===true||window.matchMedia("(display-mode: standalone)").matches;
+  var timer=0,ready=false;
+
+  function read(key){try{return window.localStorage.getItem(key)}catch(e){return null}}
+  function write(key,value){try{window.localStorage.setItem(key,value);return window.localStorage.getItem(key)===value}catch(e){return false}}
+  function remove(key){try{window.localStorage.removeItem(key)}catch(e){}}
+  function show(id){["loading","failed","install","setup"].forEach(function(p){$(p).hidden=p!==id})}
+  function clearHash(){try{history.replaceState(null,"",location.pathname+location.search)}catch(e){}}
+
+  // A setup code is base64url(JSON {v:1,u,k}); the whole setup URL may also be pasted.
+  function parseSetup(text){
+    var code=String(text||"").trim();
+    var at=code.indexOf("#setup=");
+    if(at>=0)code=code.slice(at+7);
+    else if(code.indexOf("setup=")===0)code=code.slice(6);
+    if(!/^[A-Za-z0-9_-]{20,2000}$/.test(code))return null;
+    try{
+      var b64=code.replace(/-/g,"+").replace(/_/g,"/");while(b64.length%4)b64+="=";
+      var data=JSON.parse(atob(b64));
+      if(!data||data.v!==1||!URL_RE.test(data.u)||!KEY_RE.test(data.k))return null;
+      return {u:data.u,k:data.k,c:code};
+    }catch(e){return null}
+  }
+  function stored(){
+    try{var c=JSON.parse(read(STORE)||"null");return c&&URL_RE.test(c.u)&&KEY_RE.test(c.k)?c:null}catch(e){return null}
+  }
+  function save(config){return write(STORE,JSON.stringify(config))}
+
+  function openApp(config){
+    ready=false;show("loading");$("loading").hidden=false;
+    var frame=$("frame");frame.hidden=false;
+    frame.src=config.u+"?key="+encodeURIComponent(config.k);
+    clearTimeout(timer);
+    timer=setTimeout(function(){if(!ready)fail("開けませんでした","通信状態を確認して、再読み込みしてください。直らない場合は設定し直してください。",false)},READY_TIMEOUT_MS);
+  }
+  function fail(title,text,dismissable){
+    $("failedTitle").textContent=title;$("failedText").textContent=text;$("dismissBtn").hidden=!dismissable;
+    // A key mismatch is fixed by setting up again; anything else first deserves a reload.
+    $("reloadBtn").className=dismissable?"":"primary";$("resetBtn").className=dismissable?"primary":"";
+    show("failed");
+  }
+  function showSetup(message){
+    $("frame").hidden=true;$("frame").removeAttribute("src");clearTimeout(timer);
+    $("setupError").textContent=message||"";$("setupInput").value="";show("setup");
+  }
+
+  window.addEventListener("message",function(event){
+    if(!FRAME_ORIGIN_RE.test(event.origin))return;
+    var data=event.data;
+    if(!data||data.type!=="trecard:ready")return;
+    ready=true;clearTimeout(timer);
+    if(data.state==="app"){show(null);return}
+    fail("キーが一致しません","アクセスキーが変わった可能性があります。設定し直してください。",true);
+  });
+
+  $("reloadBtn").onclick=function(){var c=stored();if(c)openApp(c);else showSetup("")};
+  $("resetBtn").onclick=function(){
+    var c=stored();if(c&&c.c)write(IGNORED,c.c);
+    remove(STORE);clearHash();showSetup("");
+  };
+  $("dismissBtn").onclick=function(){show(null)};
+  $("openHereBtn").onclick=function(){var c=stored();clearHash();if(c)openApp(c);else showSetup("")};
+  $("setupSave").onclick=function(){
+    var c=parseSetup($("setupInput").value);$("setupInput").value="";
+    if(!c){$("setupError").textContent="設定用 URL の形式が正しくありません。";return}
+    if(!save(c)){$("setupError").textContent="この端末に保存できませんでした。";return}
+    remove(IGNORED);openApp(c);
+  };
+
+  // Home-screen apps keep storage separate from Safari. The setup URL's #fragment stays in the
+  // home-screen bookmark (it is never sent to a server), so the installed app can read it on its
+  // first launch, or again if its storage was cleared; a fragment the user replaced is ignored.
+  var fromHash=location.hash.indexOf("#setup=")===0?parseSetup(location.hash):null;
+  if(location.hash&&!fromHash&&location.hash.indexOf("#setup=")===0){clearHash();showSetup("設定用 URL の形式が正しくありません。");return}
+  var config=stored();
+  if(fromHash&&(!config||!standalone)&&read(IGNORED)!==fromHash.c){config=fromHash;save(config)}
+  if(standalone){
+    clearHash();
+    if(config)openApp(config);else showSetup("");
+    return;
+  }
+  // In Safari: keep the fragment until "Add to Home Screen" so the icon carries it.
+  if(fromHash){show("install");return}
+  if(config)openApp(config);else showSetup("");
+})();
+</script>
+</body>
+</html>
