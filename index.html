@@ -20,8 +20,10 @@
 :root{--bg:#ffffff;--text:#1c1c1e;--sub:#6b6b70;--line:#e5e5ea;--accent:#1c1c1e;--accent-text:#ffffff;color-scheme:light}
 @media (prefers-color-scheme: dark){:root{--bg:#111417;--text:#ecf0f3;--sub:#a0a8b0;--line:#2a3035;--accent:#ecf0f3;--accent-text:#111417;color-scheme:dark}}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
-/* The embedded app cannot see the safe areas, so the frame is kept inside them. */
-#frame{position:fixed;top:env(safe-area-inset-top);left:env(safe-area-inset-left);right:env(safe-area-inset-right);bottom:env(safe-area-inset-bottom);width:calc(100% - env(safe-area-inset-left) - env(safe-area-inset-right));height:calc(100% - env(safe-area-inset-top) - env(safe-area-inset-bottom));border:0;background:var(--bg)}
+/* The frame covers the full height; the app pads its header and navigation itself, using the
+   insets this page reports (see sendLayout), so the home-indicator space is not added twice. */
+#frame{position:fixed;top:0;bottom:0;left:env(safe-area-inset-left);right:env(safe-area-inset-right);width:calc(100% - env(safe-area-inset-left) - env(safe-area-inset-right));height:100%;border:0;background:var(--bg)}
+#safeProbe{position:fixed;top:0;left:0;width:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
 .panel{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--bg);z-index:2}
 [hidden]{display:none!important}
 .box{width:100%;max-width:420px}
@@ -35,6 +37,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
 </style>
 </head>
 <body>
+<div id="safeProbe" aria-hidden="true"></div>
 <iframe id="frame" title="Trecard" hidden referrerpolicy="no-referrer"></iframe>
 
 <section class="panel" id="loading" hidden><div class="box"><p>読み込み中…</p></div></section>
@@ -122,11 +125,23 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     $("setupError").textContent=message||"";$("setupInput").value="";show("setup");
   }
 
+  // Reply to the app with this page's safe-area insets (numbers only) so it can pad its header
+  // and navigation even if the embedded page cannot read them itself.
+  var app=null;
+  function insets(){var s=window.getComputedStyle($("safeProbe"));return {top:parseFloat(s.paddingTop)||0,bottom:parseFloat(s.paddingBottom)||0}}
+  function sendLayout(){
+    if(!app)return;var i=insets();
+    try{app.source.postMessage({type:"trecard:layout",safeTop:i.top,safeBottom:i.bottom},app.origin)}catch(e){}
+  }
+  window.addEventListener("resize",sendLayout);
+  window.addEventListener("orientationchange",sendLayout);
+
   window.addEventListener("message",function(event){
     if(!FRAME_ORIGIN_RE.test(event.origin))return;
     var data=event.data;
     if(!data||data.type!=="trecard:ready")return;
     ready=true;clearTimeout(timer);
+    app={source:event.source,origin:event.origin};sendLayout();
     if(data.state==="app"){show(null);return}
     fail("キーが一致しません","アクセスキーが変わった可能性があります。設定し直してください。",true);
   });
