@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; manifest-src 'self'; frame-src https://script.google.com https://*.googleusercontent.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; manifest-src 'self'; worker-src 'self'; frame-src https://script.google.com https://*.googleusercontent.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>Trecard</title>
@@ -61,6 +61,14 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   <button id="openHereBtn" type="button">Safari でこのまま開く</button>
 </div></section>
 
+<section class="panel" id="push" hidden><div class="box">
+  <h1>通知をオンにする</h1>
+  <p>支払い・受け取りの期限、結果発表日、締切が近い抽選（ストア・X抽選）をこの iPhone に通知します。次の画面で「許可」を選んでください。</p>
+  <p class="err" id="pushError"></p>
+  <button class="primary" id="pushAllow" type="button">通知を許可する</button>
+  <button id="pushCancel" type="button">やめる</button>
+</div></section>
+
 <section class="panel" id="setup" hidden><div class="box">
   <h1>Trecard の設定</h1>
   <p>PC で用意した設定用 URL を貼り付けてください。</p>
@@ -80,12 +88,12 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   var FRAME_ORIGIN_RE=/^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
   var $=function(id){return document.getElementById(id)};
   var standalone=window.navigator.standalone===true||window.matchMedia("(display-mode: standalone)").matches;
-  var timer=0,ready=false;
+  var timer=0,ready=false,appNonce="";
 
   function read(key){try{return window.localStorage.getItem(key)}catch(e){return null}}
   function write(key,value){try{window.localStorage.setItem(key,value);return window.localStorage.getItem(key)===value}catch(e){return false}}
   function remove(key){try{window.localStorage.removeItem(key)}catch(e){}}
-  function show(id){["loading","failed","install","setup"].forEach(function(p){$(p).hidden=p!==id})}
+  function show(id){["loading","failed","install","setup","push"].forEach(function(p){$(p).hidden=p!==id})}
   function clearHash(){try{history.replaceState(null,"",location.pathname+location.search)}catch(e){}}
 
   // A setup code is base64url(JSON {v:1,u,k}); the whole setup URL may also be pasted.
@@ -108,9 +116,16 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   function save(config){return write(STORE,JSON.stringify(config))}
 
   function openApp(config){
+    if(openedConfig&&(openedConfig.u!==config.u||openedConfig.k!==config.k))pendingOpen=null;
+    openedConfig=config;intentStored=true;clearPushPrompt();
+    app=null;appNonce="";pushKey="";
+    try{
+      var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);
+      appNonce=Array.from(bytes,function(b){return b.toString(16).padStart(2,"0")}).join("");
+    }catch(e){fail("開けませんでした","安全な接続を準備できませんでした。ブラウザを更新してから再度開いてください。",false);return}
     ready=false;show("loading");$("loading").hidden=false;
     var frame=$("frame");frame.hidden=false;
-    frame.src=config.u+"?key="+encodeURIComponent(config.k);
+    frame.src=config.u+"?key="+encodeURIComponent(config.k)+"&wrapperNonce="+appNonce;
     clearTimeout(timer);
     timer=setTimeout(function(){if(!ready)fail("開けませんでした","通信状態を確認して、再読み込みしてください。直らない場合は設定し直してください。",false)},READY_TIMEOUT_MS);
   }
@@ -121,33 +136,157 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     show("failed");
   }
   function showSetup(message){
+    clearPushPrompt();
+    app=null;appNonce="";pushKey="";ready=false;
     $("frame").hidden=true;$("frame").removeAttribute("src");clearTimeout(timer);
     $("setupError").textContent=message||"";$("setupInput").value="";show("setup");
   }
 
   // Reply to the app with this page's safe-area insets (numbers only) so it can pad its header
   // and navigation even if the embedded page cannot read them itself.
-  var app=null;
+  var app=null,openedConfig=null,intentStored=true;
+  function embeddedSource(source){
+    try{
+      if(!source||source===window||source.closed)return false;
+      var frameWindow=$("frame").contentWindow;
+      for(var i=0;i<8&&source;i++){
+        if(source===frameWindow)return true;
+        var parent=source.parent;
+        if(!parent||parent===source||parent===window)return false;
+        source=parent;
+      }
+    }catch(e){}
+    return false;
+  }
   function insets(){var s=window.getComputedStyle($("safeProbe"));return {top:parseFloat(s.paddingTop)||0,bottom:parseFloat(s.paddingBottom)||0}}
   function sendLayout(){
     if(!app)return;var i=insets();
-    try{app.source.postMessage({type:"trecard:layout",safeTop:i.top,safeBottom:i.bottom},app.origin)}catch(e){}
+    toApp({type:"trecard:layout",safeTop:i.top,safeBottom:i.bottom});
   }
   window.addEventListener("resize",sendLayout);
   window.addEventListener("orientationchange",sendLayout);
 
+  // ---- notifications (Web Push) ----
+  // The app (in the frame) asks for the state or a subscription; permission is asked only after a tap in this page
+  // (iOS shows notifications only for an app added to the home screen). The subscription goes back to the app,
+  // which saves it with its access key. Nothing secret is kept here: the public key comes from the app.
+  var pushKey="",pendingOpen=null,subscribeOperation=null,pushQueue=Promise.resolve();
+  var pushSupported=function(){return "serviceWorker" in navigator&&"PushManager" in window&&"Notification" in window};
+  if(standalone&&"serviceWorker" in navigator){try{navigator.serviceWorker.register("sw.js").catch(function(){})}catch(e){}}
+  function toApp(message){if(!app||!appNonce)return;try{app.source.postMessage(Object.assign({},message,{nonce:appNonce}),app.origin)}catch(e){}}
+  function pushBinding(){return app&&!app.legacy&&appNonce?{app:app,nonce:appNonce}:null}
+  function currentBinding(binding){return !!binding&&app===binding.app&&appNonce===binding.nonce&&!app.legacy}
+  function operation(data,binding){return {action:data.action,id:data.operationId,binding:binding||pushBinding(),replied:false,cancelled:false,started:false}}
+  function operationId(value){return typeof value==="number"&&Number.isInteger(value)&&value>0&&value<=2147483647}
+  function clearPushPrompt(){if(subscribeOperation)subscribeOperation.cancelled=true;subscribeOperation=null;$("pushAllow").disabled=false}
+  function rememberIntent(off){
+    if(!openedConfig)return false;
+    var next={u:openedConfig.u,k:openedConfig.k,c:openedConfig.c,pushOff:off};
+    intentStored=save(next);openedConfig=next;return intentStored;
+  }
+  function basePushState(){return {type:"trecard:push-state",supported:pushSupported(),standalone:standalone,
+    permission:"Notification" in window?Notification.permission:"unsupported",subscription:null,confirmed:false,
+    intent:openedConfig&&typeof openedConfig.pushOff==="boolean"?(openedConfig.pushOff?"off":"on"):"",intentStored:intentStored}}
+  function subscriptionState(sub){var state=basePushState();state.subscription=sub?sub.toJSON():null;return state}
+  function replyPush(op,state,confirmed,error){
+    if(op.replied||!currentBinding(op.binding))return;
+    op.replied=true;state.action=op.action;state.operationId=op.id;state.confirmed=confirmed===true;
+    if(error)state.error=error;else if(!state.intentStored)state.error="intent_not_saved";
+    toApp(state);
+  }
+  function keyBytes(b64){var s=String(b64).replace(/-/g,"+").replace(/_/g,"/");while(s.length%4)s+="=";var raw=atob(s),out=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out}
+  function pushState(){
+    var base=basePushState();
+    if(!base.supported||!standalone)return Promise.resolve(base);
+    return navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription()}).then(function(sub){base.subscription=sub?sub.toJSON():null;base.confirmed=true;return base}).catch(function(){base.error="state_unavailable";return base});
+  }
+  function sendPushState(op,error){if(!currentBinding(op.binding))return;return pushState().then(function(state){replyPush(op,state,error?false:state.confirmed,error||state.error)})}
+  function enqueueMutation(task){pushQueue=pushQueue.catch(function(){}).then(task).catch(function(){});return pushQueue}
+  $("pushAllow").onclick=function(){
+    var op=subscribeOperation;
+    if(!op||op.started||op.cancelled||!currentBinding(op.binding))return;
+    op.started=true;$("pushAllow").disabled=true;
+    $("pushError").textContent="";
+    // Keep the permission request in the button's user gesture, even when another browser mutation is pending.
+    var permission;
+    try{permission=Notification.requestPermission().then(function(value){return {value:value}},function(){return {error:"permission_failed"}})}catch(e){permission=Promise.resolve({error:"permission_failed"})}
+    enqueueMutation(function(){
+      return permission.then(function(answer){
+        if(!currentBinding(op.binding))return;
+        if(op.cancelled)return sendPushState(op,"cancelled");
+        if(answer.error)return sendPushState(op,answer.error);
+        if(answer.value!=="granted"){show(null);return sendPushState(op,answer.value==="denied"?"permission_denied":"permission_default")}
+        return navigator.serviceWorker.ready.then(function(reg){
+          if(!currentBinding(op.binding))return;
+          if(op.cancelled)return sendPushState(op,"cancelled");
+          return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:keyBytes(op.key)}).then(function(sub){
+            if(!currentBinding(op.binding))return;
+            if(op.cancelled)return sendPushState(op,"cancelled");
+            rememberIntent(false);show(null);replyPush(op,subscriptionState(sub),true);
+          });
+        });
+      }).catch(function(){if(currentBinding(op.binding)){show(null);return sendPushState(op,"subscribe_failed")}})
+        .then(function(){if(subscribeOperation===op){subscribeOperation=null;$("pushAllow").disabled=false}});
+    });
+  };
+  $("pushCancel").onclick=function(){var op=subscribeOperation;if(!op)return;op.cancelled=true;subscribeOperation=null;$("pushAllow").disabled=false;show(null);sendPushState(op,"cancelled")};
+  function openTarget(target){
+    if(typeof target!=="string"||target.length>=1300)return;
+    if(app&&app.legacy){pendingOpen=null;return}
+    if(ready&&app)toApp({type:"trecard:open",target:target});else pendingOpen=target;
+  }
+  if(location.hash.indexOf("#open=")===0){try{pendingOpen=decodeURIComponent(location.hash.slice(6))}catch(e){pendingOpen=null}clearHash()}
+  if("serviceWorker" in navigator)navigator.serviceWorker.addEventListener("message",function(event){if(event.data&&event.data.type==="trecard:open")openTarget(event.data.target)});
+
   window.addEventListener("message",function(event){
     if(!FRAME_ORIGIN_RE.test(event.origin))return;
     var data=event.data;
+    // Bind the actual Apps Script frame (including its sandboxed inner frame) to this load.
+    // The token is passed only in that frame's address; a different Google-hosted window cannot replace it.
+    if(!data||!appNonce||!embeddedSource(event.source))return;
+    if(app&&(event.source!==app.source||event.origin!==app.origin))return;
+    // Older friend deployments can still display their existing UI. They never receive push subscriptions.
+    var legacy=data.nonce===undefined&&(app?app.legacy:data.type==="trecard:ready");
+    if(data.nonce!==appNonce&&!legacy)return;
+    if(data.type==="trecard:push"&&app){
+      if(app.legacy)return;
+      if(!operationId(data.operationId))return;
+      var op=operation(data);
+      if(data.action==="status"){enqueueMutation(function(){return sendPushState(op)});return}
+      if(data.action==="subscribe"&&/^[A-Za-z0-9_-]{86,88}$/.test(String(data.publicKey||""))){
+        if(!pushSupported()||!standalone){sendPushState(op,"not_available");return}
+        clearPushPrompt();op.key=String(data.publicKey);subscribeOperation=op;pushKey=op.key;show("push");return;
+      }
+      if(data.action==="subscribe"){sendPushState(op,"bad_public_key");return}
+      if(data.action==="unsubscribe"){
+        rememberIntent(true);clearPushPrompt();show(null);
+        if(!pushSupported()||!standalone){sendPushState(op,"not_available");return}
+        enqueueMutation(function(){
+          var current=null;
+          return navigator.serviceWorker.ready.then(function(reg){if(!currentBinding(op.binding))return;return reg.pushManager.getSubscription()}).then(function(sub){
+            if(!currentBinding(op.binding))return;
+            current=sub;if(!sub){replyPush(op,basePushState(),true);return}
+            return sub.unsubscribe().then(function(removed){if(!currentBinding(op.binding))return;replyPush(op,removed===true?basePushState():subscriptionState(sub),removed===true,removed===true?null:"unsubscribe_failed")});
+          }).catch(function(){if(currentBinding(op.binding)){if(current)replyPush(op,subscriptionState(current),false,"unsubscribe_failed");else return sendPushState(op,"unsubscribe_failed")}});
+        });
+        return;
+      }
+      return;
+    }
     if(!data||data.type!=="trecard:ready")return;
     ready=true;clearTimeout(timer);
-    app={source:event.source,origin:event.origin};sendLayout();
-    if(data.state==="app"){show(null);return}
+    if(data.state==="app"){
+      app={source:event.source,origin:event.origin,legacy:legacy};sendLayout();if(!legacy){var status=operation({action:"status",operationId:0});enqueueMutation(function(){return sendPushState(status)})}show(null);
+      if(legacy)pendingOpen=null;
+      else if(pendingOpen!==null){toApp({type:"trecard:open",target:pendingOpen});pendingOpen=null}return;
+    }
+    app=null;
     fail("キーが一致しません","アクセスキーが変わった可能性があります。設定し直してください。",true);
   });
 
   $("reloadBtn").onclick=function(){var c=stored();if(c)openApp(c);else showSetup("")};
   $("resetBtn").onclick=function(){
+    pendingOpen=null;
     var c=stored();if(c&&c.c)write(IGNORED,c.c);
     remove(STORE);clearHash();showSetup("");
   };
