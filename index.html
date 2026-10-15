@@ -88,7 +88,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   var FRAME_ORIGIN_RE=/^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
   var $=function(id){return document.getElementById(id)};
   var standalone=window.navigator.standalone===true||window.matchMedia("(display-mode: standalone)").matches;
-  var timer=0,ready=false,appNonce="";
+  var timer=0,ready=false,appNonce="",bootError="";
 
   function read(key){try{return window.localStorage.getItem(key)}catch(e){return null}}
   function write(key,value){try{window.localStorage.setItem(key,value);return window.localStorage.getItem(key)===value}catch(e){return false}}
@@ -123,11 +123,11 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);
       appNonce=Array.from(bytes,function(b){return b.toString(16).padStart(2,"0")}).join("");
     }catch(e){fail("開けませんでした","安全な接続を準備できませんでした。ブラウザを更新してから再度開いてください。",false);return}
-    ready=false;show("loading");$("loading").hidden=false;
+    ready=false;bootError="";show("loading");$("loading").hidden=false;
     var frame=$("frame");frame.hidden=false;
     frame.src=config.u+"?key="+encodeURIComponent(config.k)+"&wrapperNonce="+appNonce;
     clearTimeout(timer);
-    timer=setTimeout(function(){if(!ready)fail("開けませんでした","通信状態を確認して、再読み込みしてください。直らない場合は設定し直してください。",false)},READY_TIMEOUT_MS);
+    timer=setTimeout(function(){if(!ready)fail("開けませんでした","通信状態を確認して、再読み込みしてください。直らない場合は設定し直してください。"+(bootError?"（画面のエラー："+bootError+"）":""),false)},READY_TIMEOUT_MS);
   }
   function fail(title,text,dismissable){
     $("failedTitle").textContent=title;$("failedText").textContent=text;$("dismissBtn").hidden=!dismissable;
@@ -271,6 +271,14 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
         });
         return;
       }
+      return;
+    }
+    // The app could not prepare its screen (its boot guard reports the error name only). A fatal one is shown at once
+    // instead of waiting for the ready timeout; one the app recovered from is kept for a later timeout message.
+    if(data.type==="trecard:error"){
+      if(legacy)return;
+      var name=/^[A-Za-z]{1,40}$/.test(String(data.name))?String(data.name):"Error";bootError=name;
+      if(data.fatal===true&&!ready){ready=true;clearTimeout(timer);fail("開けませんでした","画面の準備でエラーが起きました（"+name+"）。再読み込みしてください。直らない場合は、Trecard の更新を待ってください。",false)}
       return;
     }
     if(!data||data.type!=="trecard:ready")return;
