@@ -82,6 +82,12 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   "use strict";
   var STORE="trecard.app.config";          // {u: Web App URL, k: access key, c: setup code}
   var IGNORED="trecard.app.ignoredSetup";   // setup code the user chose to replace
+  // The app's lists last shown and its logos (sent by the app after each load, never its key), handed back at the next
+  // launch so the lists appear at once: what the Google frame keeps itself may be gone by then (3.14.3).
+  var VIEW_DATA="trecard.app.viewData";     // {u: Web App URL it belongs to, at, data: the app's own JSON text}
+  var ICONS="trecard.app.icons";            // {u, version, icons: {shop key: data:image/...}}
+  var LAUNCHES="trecard.app.launches";      // how many times this page started (shown in the app's timing panel)
+  var VIEW_DATA_MAX_CHARS=3000000;
   var READY_TIMEOUT_MS=25000;
   var URL_RE=/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{10,200}\/exec$/;
   var KEY_RE=/^[A-Za-z0-9_-]{32,256}$/;
@@ -114,6 +120,35 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     try{var c=JSON.parse(read(STORE)||"null");return c&&URL_RE.test(c.u)&&KEY_RE.test(c.k)?c:null}catch(e){return null}
   }
   function save(config){return write(STORE,JSON.stringify(config))}
+  function forgetAppData(){remove(VIEW_DATA);remove(ICONS)}
+  function keptFor(key){try{var v=JSON.parse(read(key)||"null");return v&&openedConfig&&v.u===openedConfig.u?v:null}catch(e){return null}}
+  var launches=0;try{launches=(Number(read(LAUNCHES))||0)+1;write(LAUNCHES,String(launches))}catch(e){launches=0}
+  function validIcons(icons){
+    if(!icons||typeof icons!=="object"||Array.isArray(icons))return null;
+    var out={},keys=Object.keys(icons);if(keys.length>400)return null;
+    for(var i=0;i<keys.length;i++){var v=icons[keys[i]];if(keys[i].length>200||typeof v!=="string"||v.indexOf("data:image/")!==0||v.length>200000)return null;out[keys[i]]=v}
+    return out;
+  }
+  function sendKept(){
+    var view=keptFor(VIEW_DATA),icons=keptFor(ICONS);
+    toApp({type:"trecard:cache",data:view&&typeof view.data==="string"?view.data:"",launches:launches});
+    if(icons&&icons.version&&icons.icons)toApp({type:"trecard:icons",version:icons.version,icons:icons.icons});
+  }
+  function keepForApp(data){
+    if(!openedConfig)return;
+    if(data.type==="trecard:cache-put"){
+      if(typeof data.data!=="string"||data.data.length>VIEW_DATA_MAX_CHARS){toApp({type:"trecard:cache-saved",ok:false,reason:"too_large"});return}
+      if(!data.data){remove(VIEW_DATA);return}
+      var ok=write(VIEW_DATA,JSON.stringify({u:openedConfig.u,at:Date.now(),data:data.data}));
+      if(!ok)remove(VIEW_DATA);
+      toApp({type:"trecard:cache-saved",ok:ok,kb:Math.round(data.data.length/102.4)/10,reason:ok?"":"not_saved"});
+      return;
+    }
+    var icons=validIcons(data.icons),version=typeof data.version==="string"&&/^[A-Za-z0-9-]{0,40}$/.test(data.version)?data.version:null;
+    if(!icons||version===null)return;
+    if(!version||!Object.keys(icons).length){remove(ICONS);return}
+    if(!write(ICONS,JSON.stringify({u:openedConfig.u,version:version,icons:icons})))remove(ICONS);
+  }
 
   function openApp(config){
     if(openedConfig&&(openedConfig.u!==config.u||openedConfig.k!==config.k))pendingOpen=null;
@@ -248,6 +283,10 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     // Older friend deployments can still display their existing UI. They never receive push subscriptions.
     var legacy=data.nonce===undefined&&(app?app.legacy:data.type==="trecard:ready");
     if(data.nonce!==appNonce&&!legacy)return;
+    if((data.type==="trecard:cache-put"||data.type==="trecard:icons-put")&&app){
+      if(!app.legacy)keepForApp(data);
+      return;
+    }
     if(data.type==="trecard:push"&&app){
       if(app.legacy)return;
       if(!operationId(data.operationId))return;
@@ -284,7 +323,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     if(!data||data.type!=="trecard:ready")return;
     ready=true;clearTimeout(timer);
     if(data.state==="app"){
-      app={source:event.source,origin:event.origin,legacy:legacy};sendLayout();if(!legacy){var status=operation({action:"status",operationId:0});enqueueMutation(function(){return sendPushState(status)})}show(null);
+      app={source:event.source,origin:event.origin,legacy:legacy};sendLayout();if(!legacy){sendKept();var status=operation({action:"status",operationId:0});enqueueMutation(function(){return sendPushState(status)})}show(null);
       if(legacy)pendingOpen=null;
       else if(pendingOpen!==null){toApp({type:"trecard:open",target:pendingOpen});pendingOpen=null}return;
     }
@@ -296,7 +335,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   $("resetBtn").onclick=function(){
     pendingOpen=null;
     var c=stored();if(c&&c.c)write(IGNORED,c.c);
-    remove(STORE);clearHash();showSetup("");
+    remove(STORE);forgetAppData();clearHash();showSetup("");
   };
   $("dismissBtn").onclick=function(){show(null)};
   $("openHereBtn").onclick=function(){var c=stored();clearHash();if(c)openApp(c);else showSetup("")};
@@ -304,7 +343,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     var c=parseSetup($("setupInput").value);$("setupInput").value="";
     if(!c){$("setupError").textContent="設定用 URL の形式が正しくありません。";return}
     if(!save(c)){$("setupError").textContent="この端末に保存できませんでした。";return}
-    remove(IGNORED);openApp(c);
+    remove(IGNORED);forgetAppData();openApp(c);
   };
 
   // Home-screen apps keep storage separate from Safari. The setup URL's #fragment stays in the
