@@ -34,13 +34,49 @@ button{display:block;width:100%;min-height:48px;margin:10px 0 0;border:1px solid
 button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
 .err{color:#c0392b;min-height:1.6em;margin:8px 0 0}
+/* 3.22.0: the loading screen (nothing saved on this phone yet) and the thin top bar (the last screen is showing). Same
+   colors and type as the app (its --ground / --ink and the TRECARD mark); the app's web fonts are not loaded here (this
+   page loads nothing from other sites), so the mark uses the same monospace fallback the app names after IBM Plex Mono. */
+:root{--ground:#F2F1ED;--ink:#15161A;--ink-fg:#FFFFFF;--lsub:#62636A;--track:#E4E2DC;--lerr:#B4381C}
+@media (prefers-color-scheme: dark){:root{--ground:#121315;--ink:#ECEBE7;--ink-fg:#121315;--lsub:#A3A3A8;--track:#2A2B2F;--lerr:#F07152}}
+.loader{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--ground);color:var(--ink);opacity:1;transition:opacity .3s ease}
+.cover{position:fixed;inset:0;z-index:3;background:var(--ground)}
+.lbox{width:100%;max-width:330px;text-align:center}
+.lmark{font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-weight:600;font-size:22px;letter-spacing:.22em;margin:0 0 28px;padding-left:.22em;animation:lbreathe 2.4s ease-in-out infinite}
+@keyframes lbreathe{50%{opacity:.55}}
+.ltext{font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.06em;margin:0 0 10px}
+.ltrack{height:4px;border-radius:2px;background:var(--track);overflow:hidden}
+.ltrack i,.topbar i{display:block;height:100%;width:0;background:var(--ink);transition:width .35s ease}
+.lhint{margin:18px 0 0;font-size:13px;line-height:1.6;color:var(--lsub)}
+.lnote{margin:16px 0 0;font-size:14px;line-height:1.6;color:var(--ink);white-space:pre-line}
+.lnote.bad{color:var(--lerr)}
+.loader button{margin-top:12px}
+.loader button.primary{background:var(--ink);color:var(--ink-fg);border-color:var(--ink)}
+.topbar{position:fixed;top:env(safe-area-inset-top);left:0;right:0;z-index:4;height:3px;background:transparent;pointer-events:none;opacity:1;transition:opacity .3s ease}
+.toptext{position:fixed;top:calc(10px + env(safe-area-inset-top));left:0;right:0;z-index:4;display:flex;align-items:center;gap:8px;width:fit-content;max-width:calc(100% - 24px);margin:0 auto;box-sizing:border-box;padding:4px 6px 4px 14px;border-radius:22px;background:var(--ink);color:var(--ink-fg);font-size:12px;font-weight:700;line-height:1.4;opacity:.94}
+.toptext span{padding:6px 0;min-width:0}
+.toptext button{display:inline-block;flex:none;width:auto;min-height:36px;margin:0;padding:0 12px;border:0;border-radius:999px;background:var(--ink-fg);color:var(--ink);font-size:12px;white-space:nowrap}
+.toptext button.x{background:transparent;color:var(--ink-fg);padding:0 10px;font-size:15px}
+.loader.fade,.topbar.fade{opacity:0}
+@media (prefers-reduced-motion: reduce){.lmark{animation:none}.ltrack i,.topbar i,.loader,.topbar{transition:none}}
 </style>
 </head>
 <body>
 <div id="safeProbe" aria-hidden="true"></div>
 <iframe id="frame" title="Trecard" hidden referrerpolicy="no-referrer"></iframe>
 
-<section class="panel" id="loading" hidden><div class="box"><p>読み込み中…</p></div></section>
+<section class="loader" id="loading" hidden><div class="lbox">
+  <div class="lmark" aria-hidden="true">TRECARD</div>
+  <div class="ltext" id="loadingText" role="status" aria-live="polite">Loading…</div>
+  <div class="ltrack" id="loadingBar" role="progressbar" aria-label="読み込みの進み具合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="loadingFill"></i></div>
+  <p class="lhint" id="loadingHint"></p>
+  <p class="lnote" id="loadingNote" role="alert" hidden></p>
+  <button class="primary" id="loadingRetry" type="button" hidden>もう一度読み込む</button>
+  <button id="loadingSkip" type="button" hidden>このまま開く</button>
+</div></section>
+<div class="cover" id="cover" hidden></div>
+<div class="topbar" id="topbar" role="progressbar" aria-label="更新の進み具合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><i id="topbarFill"></i></div>
+<div class="toptext" id="topText" role="status" aria-live="polite" hidden><span id="topTextMsg"></span><button id="topRetry" type="button" hidden>再読み込み</button><button class="x" id="topClose" type="button" aria-label="閉じる" hidden>×</button></div>
 
 <section class="panel" id="failed" hidden><div class="box">
   <h1 id="failedTitle">開けませんでした</h1>
@@ -99,7 +135,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   function read(key){try{return window.localStorage.getItem(key)}catch(e){return null}}
   function write(key,value){try{window.localStorage.setItem(key,value);return window.localStorage.getItem(key)===value}catch(e){return false}}
   function remove(key){try{window.localStorage.removeItem(key)}catch(e){}}
-  function show(id){["loading","failed","install","setup","push"].forEach(function(p){$(p).hidden=p!==id})}
+  function show(id){["failed","install","setup","push"].forEach(function(p){$(p).hidden=p!==id})}
   function clearHash(){try{history.replaceState(null,"",location.pathname+location.search)}catch(e){}}
 
   // A setup code is base64url(JSON {v:1,u,k}); the whole setup URL may also be pasted.
@@ -131,7 +167,8 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   }
   function sendKept(){
     var view=keptFor(VIEW_DATA),icons=keptFor(ICONS);
-    toApp({type:"trecard:cache",data:view&&typeof view.data==="string"?view.data:"",launches:launches});
+    // loader:1 tells the app that this page shows the loading screen and the top bar (3.22.0), so it drops its own "更新中".
+    toApp({type:"trecard:cache",data:view&&typeof view.data==="string"?view.data:"",launches:launches,loader:1});
     if(icons&&icons.version&&icons.icons)toApp({type:"trecard:icons",version:icons.version,icons:icons.icons});
   }
   function keepForApp(data){
@@ -158,24 +195,132 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);
       appNonce=Array.from(bytes,function(b){return b.toString(16).padStart(2,"0")}).join("");
     }catch(e){fail("開けませんでした","安全な接続を準備できませんでした。ブラウザを更新してから再度開いてください。",false);return}
-    ready=false;bootError="";show("loading");$("loading").hidden=false;
+    ready=false;bootError="";show(null);startLoad();
     var frame=$("frame");frame.hidden=false;
     frame.src=config.u+"?key="+encodeURIComponent(config.k)+"&wrapperNonce="+appNonce;
     clearTimeout(timer);
     timer=setTimeout(function(){if(!ready)fail("開けませんでした","通信状態を確認して、再読み込みしてください。直らない場合は設定し直してください。"+(bootError?"（画面のエラー："+bootError+"）":""),false)},READY_TIMEOUT_MS);
   }
   function fail(title,text,dismissable){
+    stopLoad();
     $("failedTitle").textContent=title;$("failedText").textContent=text;$("dismissBtn").hidden=!dismissable;
     // A key mismatch is fixed by setting up again; anything else first deserves a reload.
     $("reloadBtn").className=dismissable?"":"primary";$("resetBtn").className=dismissable?"primary":"";
     show("failed");
   }
   function showSetup(message){
-    clearPushPrompt();
+    clearPushPrompt();stopLoad();
     app=null;appNonce="";pushKey="";ready=false;
     $("frame").hidden=true;$("frame").removeAttribute("src");clearTimeout(timer);
     $("setupError").textContent=message||"";$("setupInput").value="";show("setup");
   }
+
+  // ---- 3.22.0: the loading screen and the top bar ----
+  // Nothing kept on this phone: the full loading screen (mark, Loading…, the bar, one hint). Something kept: a plain
+  // cover until the app's page answers, then the last screen at once with only the thin bar on top. The bar moves only
+  // at real stages and never back: this page started 10, the app's page answered (ready) 30, the app drew the kept
+  // screen or asked the server 50, then each of the three parts of the answer (LivePocket, the calendar, the store /
+  // X lotteries; getAppSnapshot sends them together, the fallback separately) a third of the rest, all of them 100.
+  // The app tells the stages with trecard:progress (nonce-checked like every other message). An app that never sends
+  // one (an older Apps Script page) is let go LEGACY_WAIT_MS after its ready, so the screen is never left behind.
+  var HINTS=["締切が近い抽選から並んでいます","応募したら「応募済みにする」で一覧がすっきりします","マイエリアを保存すると、締切の通知が届きます",
+    "支払い・受け取りがまだの当選は「今日やること」に出ます","結果発表の予定はカレンダーで見られます"];
+  var STALL_SCREEN_MS=10000,SLOW_BAR_MS=5000,STALL_BAR_MS=10000,LEGACY_WAIT_MS=2000,FADE_MS=300,PARTS=["entries","manual","retail"];
+  var load={on:false,mode:"",pct:0,cycle:0,heard:false,failed:false,stall:[],other:[]};
+  function loadTimer(list,fn,ms){var id=setTimeout(fn,ms);list.push(id);return id}
+  function clearTimers(list){while(list.length)clearTimeout(list.pop())}
+  function hideTopText(){$("topText").hidden=true;$("topRetry").hidden=true;$("topClose").hidden=true}
+  function topText(text,retry,close){$("topTextMsg").textContent=text;$("topRetry").hidden=!retry;$("topClose").hidden=!close;$("topText").hidden=false}
+  function setBar(pct){
+    var w=pct+"%";$("loadingFill").style.width=w;$("topbarFill").style.width=w;
+    $("loadingBar").setAttribute("aria-valuenow",String(Math.round(pct)));$("topbar").setAttribute("aria-valuenow",String(Math.round(pct)));
+  }
+  function showMode(){
+    $("loading").className="loader";$("loading").hidden=load.mode!=="screen";
+    $("topbar").className="topbar";$("topbar").hidden=load.mode!=="bar";
+  }
+  function startLoad(){
+    stopLoad();
+    var kept=keptFor(VIEW_DATA);
+    load={on:true,mode:kept&&typeof kept.data==="string"&&kept.data?"bar":"screen",pct:0,cycle:0,heard:false,failed:false,stall:[],other:[]};
+    $("loadingText").textContent="Loading…";$("loadingNote").hidden=true;$("loadingNote").className="lnote";
+    $("loadingRetry").hidden=true;$("loadingSkip").hidden=true;
+    $("loadingHint").textContent=HINTS[Math.floor(Math.random()*HINTS.length)%HINTS.length];$("loadingHint").hidden=false;
+    $("cover").hidden=load.mode!=="bar";setBar(0);showMode();advance(10);
+  }
+  function startBar(cycle){
+    clearTimers(load.stall);clearTimers(load.other);hideTopText();
+    load={on:true,mode:"bar",pct:0,cycle:cycle,heard:true,failed:false,stall:[],other:[]};
+    setBar(0);showMode();
+  }
+  function stopLoad(){
+    clearTimers(load.stall);clearTimers(load.other);load.on=false;
+    $("loading").hidden=true;$("cover").hidden=true;$("topbar").hidden=true;hideTopText();
+  }
+  function armStall(){
+    clearTimers(load.stall);
+    if(load.mode==="screen")loadTimer(load.stall,function(){stalled()},STALL_SCREEN_MS);
+    else{loadTimer(load.stall,function(){if(load.on&&!load.failed)topText("更新に時間がかかっています",false,false)},SLOW_BAR_MS);loadTimer(load.stall,function(){stalled()},STALL_BAR_MS)}
+  }
+  function stalled(){
+    if(!load.on||load.failed)return;
+    if(load.mode==="screen"){$("loadingNote").textContent="時間がかかっています";$("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready}
+    else topText("更新に時間がかかっています",true,false);
+  }
+  function advance(pct){
+    if(!load.on||load.failed||pct<=load.pct)return;
+    load.pct=Math.min(100,pct);setBar(load.pct);
+    if(load.mode==="screen"){$("loadingNote").hidden=true;$("loadingRetry").hidden=true;$("loadingSkip").hidden=true}else hideTopText();
+    if(load.pct>=100){finishLoad();return}
+    armStall();
+  }
+  function finishLoad(){
+    clearTimers(load.stall);clearTimers(load.other);hideTopText();$("cover").hidden=true;
+    $("loading").className="loader fade";$("topbar").className="topbar fade";
+    loadTimer(load.other,function(){load.on=false;$("loading").hidden=true;$("topbar").hidden=true},FADE_MS);
+  }
+  // The kept screen was drawn (from the app's own copy) while the full screen was up: change to the thin bar.
+  function toBar(){
+    if(load.mode!=="screen")return;
+    load.mode="bar";$("loading").className="loader fade";$("topbar").className="topbar";$("topbar").hidden=false;
+    loadTimer(load.other,function(){$("loading").hidden=true},FADE_MS);armStall();
+  }
+  function failLoad(texts){
+    load.failed=true;clearTimers(load.stall);
+    if(load.mode==="screen"){
+      $("loadingText").textContent="読み込みに失敗しました";$("loadingHint").hidden=true;$("loadingNote").textContent=texts.join("\n");$("loadingNote").className="lnote bad";
+      $("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
+    }else{$("topbar").hidden=true;topText("更新できませんでした（前回のデータを表示中）",true,true)}
+  }
+  function retryLoad(){
+    // With the app open, ask it to read its data again (the screen stays); before that, open the page again.
+    if(ready&&app&&!app.legacy&&load.mode==="bar"){hideTopText();toApp({type:"trecard:refresh"});return}
+    var c=stored();if(c)openApp(c);else showSetup("");
+  }
+  // Stages from the app: {cycle, saved, parts: {entries|manual|retail: ""|"done"|"failed"}, errors: {part: text}}.
+  // A cycle is one reading of the data (the first at start, then each refresh); each gets its own bar.
+  function onProgress(data){
+    var cycle=Number(data.cycle);if(!Number.isInteger(cycle)||cycle<0||cycle>100000)return;
+    load.heard=true;
+    if(cycle<load.cycle)return;
+    if(cycle>load.cycle){if(!load.on||load.failed||load.pct>=100)startBar(cycle);else load.cycle=cycle}
+    if(!load.on)return;
+    var parts=data.parts&&typeof data.parts==="object"?data.parts:{},errors=data.errors&&typeof data.errors==="object"?data.errors:{};
+    if(data.saved===true)toBar();
+    if(data.saved===true||cycle>0)advance(50);
+    if(cycle<1)return;
+    var done=0,settled=0,texts=[];
+    PARTS.forEach(function(p){
+      if(parts[p]==="done"){done++;settled++}
+      else if(parts[p]==="failed"){settled++;var t=typeof errors[p]==="string"?errors[p].slice(0,160):"";if(t)texts.push(t)}
+    });
+    if(settled===PARTS.length&&done<PARTS.length){failLoad(texts.length?texts:["読み込みに失敗しました。もう一度読み込んでください。"]);return}
+    advance(50+50*done/PARTS.length);
+  }
+  $("loadingRetry").onclick=retryLoad;
+  $("topRetry").onclick=retryLoad;
+  $("loadingSkip").onclick=function(){stopLoad()};
+  $("topClose").onclick=function(){hideTopText()};
 
   // Reply to the app with this page's safe-area insets (numbers only) so it can pad its header
   // and navigation even if the embedded page cannot read them itself.
@@ -287,6 +432,10 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       if(!app.legacy)keepForApp(data);
       return;
     }
+    if(data.type==="trecard:progress"){
+      if(app&&!app.legacy)onProgress(data);
+      return;
+    }
     if(data.type==="trecard:push"&&app){
       if(app.legacy)return;
       if(!operationId(data.operationId))return;
@@ -324,6 +473,10 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     ready=true;clearTimeout(timer);
     if(data.state==="app"){
       app={source:event.source,origin:event.origin,legacy:legacy};sendLayout();if(!legacy){sendKept();var status=operation({action:"status",operationId:0});enqueueMutation(function(){return sendPushState(status)})}show(null);
+      // 3.22.0: the app's page is there (30). An older app tells no stages: let the screen go after a short wait.
+      $("cover").hidden=true;
+      if(legacy)stopLoad();
+      else{advance(30);loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
       if(legacy)pendingOpen=null;
       else if(pendingOpen!==null){toApp({type:"trecard:open",target:pendingOpen});pendingOpen=null}return;
     }
