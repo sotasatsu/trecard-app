@@ -225,7 +225,8 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   // one (an older Apps Script page) is let go LEGACY_WAIT_MS after its ready, so the screen is never left behind.
   var HINTS=["締切が近い抽選から並んでいます","応募したら「応募済みにする」で一覧がすっきりします","マイエリアを保存すると、締切の通知が届きます",
     "支払い・受け取りがまだの当選は「今日やること」に出ます","結果発表の予定はカレンダーで見られます"];
-  var STALL_SCREEN_MS=10000,SLOW_BAR_MS=5000,STALL_BAR_MS=10000,LEGACY_WAIT_MS=2000,FADE_MS=300,PARTS=["entries","manual","retail"];
+  // 3.23.0: the thin bar says it is slow after 10 seconds (was 5) and offers 「再読み込み」 after 20 (was 10).
+  var STALL_SCREEN_MS=10000,SLOW_BAR_MS=10000,STALL_BAR_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=300,PARTS=["entries","manual","retail"];
   var load={on:false,mode:"",pct:0,cycle:0,heard:false,failed:false,stall:[],other:[]};
   function loadTimer(list,fn,ms){var id=setTimeout(fn,ms);list.push(id);return id}
   function clearTimers(list){while(list.length)clearTimeout(list.pop())}
