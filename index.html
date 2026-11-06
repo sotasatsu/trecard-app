@@ -40,7 +40,6 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
 :root{--ground:#F2F1ED;--ink:#15161A;--ink-fg:#FFFFFF;--lsub:#62636A;--track:#E4E2DC;--lerr:#B4381C}
 @media (prefers-color-scheme: dark){:root{--ground:#121315;--ink:#ECEBE7;--ink-fg:#121315;--lsub:#A3A3A8;--track:#2A2B2F;--lerr:#F07152}}
 .loader{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--ground);color:var(--ink);opacity:1;transition:opacity .3s ease}
-.cover{position:fixed;inset:0;z-index:3;background:var(--ground)}
 .lbox{width:100%;max-width:330px;text-align:center}
 /* 3.45.1: the pixel-art loader (docs/design/loader-reference.html). 80x60 shown three times over; its own colors match its canvas. */
 .loader{background:#F3F1EC}
@@ -49,18 +48,12 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
 .lpct{font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-size:34px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;color:var(--ink)}
 .lpct small{font-size:17px;margin-left:2px}
 .ltext{font-size:13px;font-weight:600;letter-spacing:.04em;margin:10px 0 0;min-height:1.6em;color:var(--lsub)}
-.topbar i{display:block;height:100%;width:0;background:var(--ink);transition:width .35s ease}
 .lnote{margin:16px 0 0;font-size:14px;line-height:1.6;color:var(--ink);white-space:pre-line}
 .lnote.bad{color:var(--lerr)}
 .loader button{margin-top:12px}
 .loader button.primary{background:var(--ink);color:var(--ink-fg);border-color:var(--ink)}
-.topbar{position:fixed;top:env(safe-area-inset-top);left:0;right:0;z-index:4;height:3px;background:transparent;pointer-events:none;opacity:1;transition:opacity .3s ease}
-.toptext{position:fixed;top:calc(10px + env(safe-area-inset-top));left:0;right:0;z-index:4;display:flex;align-items:center;gap:8px;width:fit-content;max-width:calc(100% - 24px);margin:0 auto;box-sizing:border-box;padding:4px 6px 4px 14px;border-radius:22px;background:var(--ink);color:var(--ink-fg);font-size:12px;font-weight:700;line-height:1.4;opacity:.94}
-.toptext span{padding:6px 0;min-width:0}
-.toptext button{display:inline-block;flex:none;width:auto;min-height:36px;margin:0;padding:0 12px;border:0;border-radius:999px;background:var(--ink-fg);color:var(--ink);font-size:12px;white-space:nowrap}
-.toptext button.x{background:transparent;color:var(--ink-fg);padding:0 10px;font-size:15px}
-.loader.fade,.topbar.fade{opacity:0}
-@media (prefers-reduced-motion: reduce){.topbar i,.loader,.topbar{transition:none}}
+.loader.fade{opacity:0}
+@media (prefers-reduced-motion: reduce){.loader{transition:none}}
 </style>
 </head>
 <body>
@@ -75,9 +68,6 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   <button class="primary" id="loadingRetry" type="button" hidden>再読み込み</button>
   <button id="loadingSkip" type="button" hidden>このまま開く</button>
 </div></section>
-<div class="cover" id="cover" hidden></div>
-<div class="topbar" id="topbar" role="progressbar" aria-label="更新の進み具合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><i id="topbarFill"></i></div>
-<div class="toptext" id="topText" role="status" aria-live="polite" hidden><span id="topTextMsg"></span><button id="topRetry" type="button" hidden>再読み込み</button><button class="x" id="topClose" type="button" aria-label="閉じる" hidden>×</button></div>
 
 <section class="panel" id="failed" hidden><div class="box">
   <h1 id="failedTitle">開けませんでした</h1>
@@ -216,17 +206,16 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     $("setupError").textContent=message||"";$("setupInput").value="";show("setup");
   }
 
-  // ---- 3.22.0, 3.45.1: the loading screen and the top bar ----
-  // 3.45.1: every launch opens on the pixel-art screen, over the frame, so nothing can be touched yet. It ends when the list can be shown: the
-  // kept screen drawn, or all three parts of the answer in. Then 100% and the small celebration, about a second, and it fades. A kept screen
-  // still reading the latest goes on with the thin bar. The bar moves only at real stages and never back: this page started 10, the app's page
-  // answered (ready) 30, the app drew the kept screen or asked the server 50, then each of the three parts (LivePocket, the calendar, the store /
-  // X lotteries; getAppSnapshot sends them together, the fallback separately) a third of the rest, all of them 100.
+  // ---- 3.22.0, 3.45.1, 3.46.0: the loading screen ----
+  // Every launch opens on the pixel-art screen, over the frame, so nothing can be touched yet. 3.46.0: it stays until the latest data has arrived, also
+  // when a list is kept from last time (the thin top bar is gone; the old list is never used by hand, and a refresh shows the app's own mark). Then 100%
+  // and the small celebration, about a second, and it fades. The stages: this page started, the app's page answered, it asked the server, then each of
+  // the three parts (LivePocket, the calendar, the store / X lotteries; getAppSnapshot sends them together, the fallback separately).
   // The app tells the stages with trecard:progress (nonce-checked like every other message). An app that never sends
   // one (an older Apps Script page) is let go LEGACY_WAIT_MS after its ready, so the screen is never left behind.
   // 3.23.0: the thin bar says it is slow after 10 seconds (was 5) and offers 「再読み込み」 after 20 (was 10).
-  var STALL_SCREEN_MS=20000,SLOW_BAR_MS=10000,STALL_BAR_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=300,RAMP_MS=320,CHEER_MS=1000,PARTS=["entries","manual","retail"];
-  var load={on:false,mode:"",pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
+  var STALL_SCREEN_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=300,RAMP_MS=320,CHEER_MS=1000,PARTS=["entries","manual","retail"];
+  var load={on:false,pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
   // The picture: drawing code from docs/design/loader-reference.html (the decided version), on a canvas of 80x60.
   var SW=80,SH=60,SN=10,SCW=6,SCH=9,SX0=Math.round((SW-(SN*SCW+(SN-1)))/2);
   var SPAL={light:{bg:"#F3F1EC",line:"#1D1C1A",paper:"#FFFDF7",shade:"#D9D4C8",red:"#D9473D",blue:"#3C6FD8",yellow:"#F2B632",pink:"#F08BB0",green:"#3FAE6A",mute:"#B8B2A5",slot:"#C9C3B6"},
@@ -298,96 +287,57 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   }
   function loadTimer(list,fn,ms){var id=setTimeout(fn,ms);list.push(id);return id}
   function clearTimers(list){while(list.length)clearTimeout(list.pop())}
-  function hideTopText(){$("topText").hidden=true;$("topRetry").hidden=true;$("topClose").hidden=true}
-  function topText(text,retry,close){$("topTextMsg").textContent=text;$("topRetry").hidden=!retry;$("topClose").hidden=!close;$("topText").hidden=false}
-  function setBar(pct){
-    $("topbarFill").style.width=pct+"%";$("topbar").setAttribute("aria-valuenow",String(Math.round(pct)));
-  }
-  function showMode(){
-    $("loading").className="loader";$("loading").hidden=load.mode!=="screen";
-    $("topbar").className="topbar";$("topbar").hidden=load.mode!=="bar";
-  }
   function startLoad(){
     stopLoad();
-    load={on:true,mode:"screen",pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
+    load={on:true,pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
     $("loadingNote").hidden=true;$("loadingNote").className="lnote";
     $("loadingRetry").hidden=true;$("loadingSkip").hidden=true;
-    $("cover").hidden=true;setBar(0);showMode();sceneStart();advance(10);
-  }
-  function startBar(cycle){
-    clearTimers(load.stall);clearTimers(load.other);hideTopText();sceneStop();
-    load={on:true,mode:"bar",pct:0,cycle:cycle,heard:true,failed:false,finale:false,armed:false,stall:[],other:[]};
-    setBar(0);showMode();
+    $("loading").className="loader";$("loading").hidden=false;sceneStart();advance(10);
   }
   function stopLoad(){
     clearTimers(load.stall);clearTimers(load.other);load.on=false;sceneStop();
-    $("loading").hidden=true;$("cover").hidden=true;$("topbar").hidden=true;hideTopText();
+    $("loading").hidden=true;
   }
   function armStall(){
-    // The screen counts 20 seconds from when it opened, once; the thin bar from its last move.
-    if(load.mode==="screen"){if(!load.armed&&!load.finale){load.armed=true;loadTimer(load.stall,function(){stalled()},STALL_SCREEN_MS)}return}
-    clearTimers(load.stall);
-    {loadTimer(load.stall,function(){if(load.on&&!load.failed)topText("更新に時間がかかっています",false,false)},SLOW_BAR_MS);loadTimer(load.stall,function(){stalled()},STALL_BAR_MS)}
+    // 20 seconds from when the screen opened, once.
+    if(!load.armed&&!load.finale){load.armed=true;loadTimer(load.stall,function(){stalled()},STALL_SCREEN_MS)}
   }
   function stalled(){
     if(!load.on||load.failed)return;
-    if(load.mode==="screen"){$("loadingNote").textContent="時間がかかっています";$("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready}
-    else topText("更新に時間がかかっています",true,false);
+    $("loadingNote").textContent="時間がかかっています";$("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
   }
   function advance(pct){
     if(!load.on||load.failed||pct<=load.pct)return;
-    load.pct=Math.min(100,pct);setBar(load.pct);
-    if(load.mode!=="screen")hideTopText();
+    load.pct=Math.min(100,pct);
     if(load.pct>=100){finishLoad();return}
     armStall();
   }
   function fadeOut(){
-    clearTimers(load.stall);clearTimers(load.other);hideTopText();$("cover").hidden=true;
-    $("loading").className="loader fade";$("topbar").className="topbar fade";
-    loadTimer(load.other,function(){load.on=false;sceneStop();$("loading").hidden=true;$("topbar").hidden=true},FADE_MS);
+    clearTimers(load.stall);clearTimers(load.other);
+    $("loading").className="loader fade";
+    loadTimer(load.other,function(){load.on=false;sceneStop();$("loading").hidden=true},FADE_MS);
   }
   function finishLoad(){
-    if(load.mode!=="screen"){fadeOut();return}
-    // During the cheer (a kept screen drawn), the rest of the answer arriving only ends the thin bar before it starts.
     if(load.finale)return;
     load.finale=true;sceneFinish(fadeOut);
   }
-  // The kept screen was drawn (from the app's own copy): the list can be shown. After the cheer, the thin bar while the latest arrives.
-  function toBar(){
-    if(load.mode!=="screen"||load.finale)return;
-    load.finale=true;
-    sceneFinish(function(){
-      if(load.pct>=100){fadeOut();return}
-      load.mode="bar";load.finale=false;$("loading").className="loader fade";$("topbar").className="topbar";$("topbar").hidden=false;
-      loadTimer(load.other,function(){sceneStop();$("loading").hidden=true},FADE_MS);
-      if(load.failed){$("topbar").hidden=true;topText("更新できませんでした（前回のデータを表示中）",true,true)}else armStall();
-    });
-  }
   function failLoad(texts){
     load.failed=true;clearTimers(load.stall);
-    // The kept screen is already drawn and the small celebration is playing: it is said on the thin bar's line right after.
-    if(load.mode==="screen"&&load.finale)return;
-    if(load.mode==="screen"){
-      $("loadingText").textContent="読み込みに失敗しました";$("loadingNote").textContent=texts.join("\n");$("loadingNote").className="lnote bad";
-      $("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
-    }else{$("topbar").hidden=true;topText("更新できませんでした（前回のデータを表示中）",true,true)}
+    $("loadingText").textContent="読み込みに失敗しました";$("loadingNote").textContent=texts.join("\n");$("loadingNote").className="lnote bad";
+    $("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
   }
   function retryLoad(){
-    // With the app open, ask it to read its data again (the screen stays); before that, open the page again.
-    if(ready&&app&&!app.legacy&&load.mode==="bar"){hideTopText();toApp({type:"trecard:refresh"});return}
     var c=stored();if(c)openApp(c);else showSetup("");
   }
   // Stages from the app: {cycle, saved, parts: {entries|manual|retail: ""|"done"|"failed"}, errors: {part: text}}.
-  // A cycle is one reading of the data (the first at start, then each refresh); each gets its own bar.
+  // A cycle is one reading of the data. 3.46.0: only the first launch's is shown here; a refresh later shows the app's own mark.
   function onProgress(data){
     var cycle=Number(data.cycle);if(!Number.isInteger(cycle)||cycle<0||cycle>100000)return;
     load.heard=true;
-    if(cycle<load.cycle)return;
-    if(cycle>load.cycle){if(!load.on||load.failed||load.pct>=100)startBar(cycle);else load.cycle=cycle}
-    if(!load.on)return;
+    if(!load.on||cycle<load.cycle)return;
+    if(cycle>load.cycle){if(load.failed||load.pct>=100)return;load.cycle=cycle}
     var parts=data.parts&&typeof data.parts==="object"?data.parts:{},errors=data.errors&&typeof data.errors==="object"?data.errors:{};
-    if(data.saved===true)toBar();
-    if(data.saved===true||cycle>0)advance(50);
+    if(cycle>0)advance(50);
     if(cycle<1)return;
     var done=0,settled=0,texts=[];
     PARTS.forEach(function(p){
@@ -395,13 +345,11 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       else if(parts[p]==="failed"){settled++;var t=typeof errors[p]==="string"?errors[p].slice(0,160):"";if(t)texts.push(t)}
     });
     if(settled===PARTS.length&&done<PARTS.length){failLoad(texts.length?texts:["読み込みに失敗しました。もう一度読み込んでください。"]);return}
-    if(load.mode==="screen"&&!load.finale)sceneStage(1,40+50*done/PARTS.length,89.4);
+    if(!load.finale)sceneStage(1,40+50*done/PARTS.length,89.4);
     advance(50+50*done/PARTS.length);
   }
   $("loadingRetry").onclick=retryLoad;
-  $("topRetry").onclick=retryLoad;
   $("loadingSkip").onclick=function(){stopLoad()};
-  $("topClose").onclick=function(){hideTopText()};
 
   // Reply to the app with this page's safe-area insets (numbers only) so it can pad its header
   // and navigation even if the embedded page cannot read them itself.
@@ -555,9 +503,8 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     if(data.state==="app"){
       app={source:event.source,origin:event.origin,legacy:legacy};sendLayout();if(!legacy){sendKept();var status=operation({action:"status",operationId:0});enqueueMutation(function(){return sendPushState(status)})}show(null);
       // 3.22.0: the app's page is there (30). An older app tells no stages: let the screen go after a short wait.
-      $("cover").hidden=true;
       if(legacy)stopLoad();
-      else{advance(30);if(load.mode==="screen"&&!load.finale)sceneStage(1,40,89.4);loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
+      else{advance(30);if(!load.finale)sceneStage(1,40,89.4);loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
       if(legacy)pendingOpen=null;
       else if(pendingOpen!==null){toApp({type:"trecard:open",target:pendingOpen});pendingOpen=null}return;
     }
