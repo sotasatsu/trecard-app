@@ -42,12 +42,14 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
 .loader{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--ground);color:var(--ink);opacity:1;transition:opacity .3s ease}
 .cover{position:fixed;inset:0;z-index:3;background:var(--ground)}
 .lbox{width:100%;max-width:330px;text-align:center}
-.lmark{font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-weight:600;font-size:22px;letter-spacing:.22em;margin:0 0 28px;padding-left:.22em;animation:lbreathe 2.4s ease-in-out infinite}
-@keyframes lbreathe{50%{opacity:.55}}
-.ltext{font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.06em;margin:0 0 10px}
-.ltrack{height:4px;border-radius:2px;background:var(--track);overflow:hidden}
-.ltrack i,.topbar i{display:block;height:100%;width:0;background:var(--ink);transition:width .35s ease}
-.lhint{margin:18px 0 0;font-size:13px;line-height:1.6;color:var(--lsub)}
+/* 3.45.1: the pixel-art loader (docs/design/loader-reference.html). 80x60 shown three times over; its own colors match its canvas. */
+.loader{background:#F3F1EC}
+@media (prefers-color-scheme: dark){.loader{background:#17171A}}
+.lcanvas{display:block;width:240px;max-width:100%;aspect-ratio:4/3;margin:0 auto 10px;image-rendering:pixelated;image-rendering:crisp-edges}
+.lpct{font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-size:34px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;color:var(--ink)}
+.lpct small{font-size:17px;margin-left:2px}
+.ltext{font-size:13px;font-weight:600;letter-spacing:.04em;margin:10px 0 0;min-height:1.6em;color:var(--lsub)}
+.topbar i{display:block;height:100%;width:0;background:var(--ink);transition:width .35s ease}
 .lnote{margin:16px 0 0;font-size:14px;line-height:1.6;color:var(--ink);white-space:pre-line}
 .lnote.bad{color:var(--lerr)}
 .loader button{margin-top:12px}
@@ -58,7 +60,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
 .toptext button{display:inline-block;flex:none;width:auto;min-height:36px;margin:0;padding:0 12px;border:0;border-radius:999px;background:var(--ink-fg);color:var(--ink);font-size:12px;white-space:nowrap}
 .toptext button.x{background:transparent;color:var(--ink-fg);padding:0 10px;font-size:15px}
 .loader.fade,.topbar.fade{opacity:0}
-@media (prefers-reduced-motion: reduce){.lmark{animation:none}.ltrack i,.topbar i,.loader,.topbar{transition:none}}
+@media (prefers-reduced-motion: reduce){.topbar i,.loader,.topbar{transition:none}}
 </style>
 </head>
 <body>
@@ -66,12 +68,11 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
 <iframe id="frame" title="Trecard" hidden referrerpolicy="no-referrer"></iframe>
 
 <section class="loader" id="loading" hidden><div class="lbox">
-  <div class="lmark" aria-hidden="true">TRECARD</div>
-  <div class="ltext" id="loadingText" role="status" aria-live="polite">Loading…</div>
-  <div class="ltrack" id="loadingBar" role="progressbar" aria-label="読み込みの進み具合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="loadingFill"></i></div>
-  <p class="lhint" id="loadingHint"></p>
+  <canvas class="lcanvas" id="loadingCanvas" width="80" height="60" aria-hidden="true"></canvas>
+  <div class="lpct" id="loadingBar" role="progressbar" aria-label="読み込みの進み具合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="loadingPct">0</span><small>%</small></div>
+  <div class="ltext" id="loadingText" role="status" aria-live="polite"></div>
   <p class="lnote" id="loadingNote" role="alert" hidden></p>
-  <button class="primary" id="loadingRetry" type="button" hidden>もう一度読み込む</button>
+  <button class="primary" id="loadingRetry" type="button" hidden>再読み込み</button>
   <button id="loadingSkip" type="button" hidden>このまま開く</button>
 </div></section>
 <div class="cover" id="cover" hidden></div>
@@ -215,26 +216,92 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     $("setupError").textContent=message||"";$("setupInput").value="";show("setup");
   }
 
-  // ---- 3.22.0: the loading screen and the top bar ----
-  // Nothing kept on this phone: the full loading screen (mark, Loading…, the bar, one hint). Something kept: a plain
-  // cover until the app's page answers, then the last screen at once with only the thin bar on top. The bar moves only
-  // at real stages and never back: this page started 10, the app's page answered (ready) 30, the app drew the kept
-  // screen or asked the server 50, then each of the three parts of the answer (LivePocket, the calendar, the store /
+  // ---- 3.22.0, 3.45.1: the loading screen and the top bar ----
+  // 3.45.1: every launch opens on the pixel-art screen, over the frame, so nothing can be touched yet. It ends when the list can be shown: the
+  // kept screen drawn, or all three parts of the answer in. Then 100% and the small celebration, about a second, and it fades. A kept screen
+  // still reading the latest goes on with the thin bar. The bar moves only at real stages and never back: this page started 10, the app's page
+  // answered (ready) 30, the app drew the kept screen or asked the server 50, then each of the three parts (LivePocket, the calendar, the store /
   // X lotteries; getAppSnapshot sends them together, the fallback separately) a third of the rest, all of them 100.
   // The app tells the stages with trecard:progress (nonce-checked like every other message). An app that never sends
   // one (an older Apps Script page) is let go LEGACY_WAIT_MS after its ready, so the screen is never left behind.
-  var HINTS=["締切が近い抽選から並んでいます","応募したら「応募済みにする」で一覧がすっきりします","マイエリアを保存すると、締切の通知が届きます",
-    "支払い・受け取りがまだの当選は「応募済み」に出ます","結果発表の予定はカレンダーで見られます"];
   // 3.23.0: the thin bar says it is slow after 10 seconds (was 5) and offers 「再読み込み」 after 20 (was 10).
-  var STALL_SCREEN_MS=10000,SLOW_BAR_MS=10000,STALL_BAR_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=300,PARTS=["entries","manual","retail"];
-  var load={on:false,mode:"",pct:0,cycle:0,heard:false,failed:false,stall:[],other:[]};
+  var STALL_SCREEN_MS=20000,SLOW_BAR_MS=10000,STALL_BAR_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=300,RAMP_MS=320,CHEER_MS=1000,PARTS=["entries","manual","retail"];
+  var load={on:false,mode:"",pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
+  // The picture: drawing code from docs/design/loader-reference.html (the decided version), on a canvas of 80x60.
+  var SW=80,SH=60,SN=10,SCW=6,SCH=9,SX0=Math.round((SW-(SN*SCW+(SN-1)))/2);
+  var SPAL={light:{bg:"#F3F1EC",line:"#1D1C1A",paper:"#FFFDF7",shade:"#D9D4C8",red:"#D9473D",blue:"#3C6FD8",yellow:"#F2B632",pink:"#F08BB0",green:"#3FAE6A",mute:"#B8B2A5",slot:"#C9C3B6"},
+    dark:{bg:"#17171A",line:"#0A0A0B",paper:"#F4F1E8",shade:"#3A3940",red:"#E2574C",blue:"#5B88EA",yellow:"#F5C24E",pink:"#F49CBD",green:"#52C27D",mute:"#55535B",slot:"#4A4950"}};
+  function sArt(k){return [k.blue,k.pink,k.yellow,k.green]}
+  function sP(c,x,y,w,h,col){c.fillStyle=col;c.fillRect(Math.round(x),Math.round(y),w||1,h||1)}
+  function sBox(c,x,y,w,h,fill,line){sP(c,x,y,w,h,line);if(w>2&&h>2)sP(c,x+1,y+1,w-2,h-2,fill)}
+  function sSparkle(c,x,y,s,col){sP(c,x,y-s,1,2*s+1,col);sP(c,x-s,y,2*s+1,1,col)}
+  function sBack(c,x,y,w,h,k){sBox(c,x,y,w,h,k.red,k.line);for(var j=2;j<h-2;j++)for(var i=2;i<w-2;i++)if((i+j)%4===0)sP(c,x+i,y+j,1,1,k.paper)}
+  function sFace(c,x,y,w,h,k,col){sBox(c,x,y,w,h,k.paper,k.line);if(w>=6)sP(c,x+1,y+1,w-2,Math.max(2,Math.floor(h*.35)),col)}
+  function sBurst(c,cx,cy,d,k){var cols=sArt(k);if(d>0.95)return;for(var i=0;i<8;i++){var a=i/8*Math.PI*2,r=4+d*14;sSparkle(c,cx+Math.cos(a)*r,cy+Math.sin(a)*r,d<.5?1:0,cols[i%4])}}
+  function sKun(c,x,y,t,k){var step=Math.floor(t*10)%2;sBox(c,x,y,7,10,k.paper,k.line);sP(c,x+1,y+1,5,3,k.blue);sP(c,x+2,y+5,1,1,k.line);sP(c,x+4,y+5,1,1,k.line);sP(c,x+1+step,y+10,1,2,k.line);sP(c,x+5-step,y+10,1,2,k.line)}
+  function sHappy(c,x,y,k){sP(c,x+1,y+4,5,3,k.paper);sP(c,x+1,y+5,1,1,k.line);sP(c,x+2,y+4,1,1,k.line);sP(c,x+4,y+4,1,1,k.line);sP(c,x+5,y+5,1,1,k.line);sP(c,x+1,y+6,1,1,k.pink);sP(c,x+5,y+6,1,1,k.pink)}
+  function sDust(c,x,y,t,k){for(var i=0;i<3;i++){var a=((t*3)+i/3)%1;sP(c,x-2-a*8,y+11-Math.round(a*2),a<.5?2:1,1,k.mute)}}
+  function sStars(c,t,k){for(var i=0;i<7;i++){var sp=4+(i%3)*3,x=SW-((t*sp+i*13)%SW),y=6+((i*11)%22),col=[k.mute,k.yellow,k.pink][i%3];if(i%3===1&&Math.floor(t*4+i)%3===0)sSparkle(c,x,y,1,col);else sP(c,x,y,1,1,col)}}
+  function sFlipW(p,lim){var a=p-lim;return a<4?Math.max(2,Math.round(SCW*Math.abs(Math.cos(a/4*Math.PI)))):SCW}
+  function sDraw(c,t,p,d,k){
+    sP(c,0,0,SW,SH,k.bg);sStars(c,t,k);
+    var y0=34,cols=sArt(k);
+    for(var i=0;i<SN;i++){var x=SX0+i*(SCW+1),lim=(i+1)*10;
+      if(p>=lim){var a=p-lim,w=d>0?SCW:sFlipW(p,lim),hop=a<3&&d===0?Math.round(Math.sin(a/3*Math.PI)*2):0;sFace(c,x+(SCW-w)/2,y0-hop,w,SCH,k,cols[i%4])}
+      else sBack(c,x,y0,SCW,SCH,k)}
+    var rx=SX0+Math.min(p,100)/100*(SN*(SCW+1)-SCW),step=Math.floor(t*10)%2,jump=d>0?Math.round(Math.abs(Math.sin(t*7))*5):0,ry=21-step-jump;
+    if(d===0)sDust(c,rx,ry,t,k);
+    sKun(c,rx,ry,t,k);if(d>0)sHappy(c,rx,ry,k);
+    for(var g=6;g<SW-6;g+=3)sP(c,g,y0+SCH+4,2,1,k.mute);
+    if(d>0)sBurst(c,40,20,d,k);
+  }
+  // The percent: 0-40 the page, 40-90 the data, 100 only when it is really there. Within a stage it creeps towards the stage's end without reaching
+  // it, so it never looks stopped and is never ahead of what has happened.
+  var SCENE_TEXT=["画面を読み込み中…","抽選のデータを取得中…","表示しています…","準備できました"];
+  var scene={run:0,stage:0,p:0,floor:0,cap:39.4,shown:-1,t0:0,last:0,doneAt:0};
+  function nowMs(){return Date.now()}
+  function sceneShow(){var n=Math.floor(scene.p);if(n!==scene.shown){scene.shown=n;$("loadingPct").textContent=String(n);$("loadingBar").setAttribute("aria-valuenow",String(n))}}
+  function sceneStage(stage,floor,cap){
+    if(stage<scene.stage)return;
+    scene.stage=stage;scene.floor=Math.max(scene.floor,floor);scene.cap=cap;if(scene.p<scene.floor)scene.p=scene.floor;
+    $("loadingText").textContent=SCENE_TEXT[stage];sceneShow();
+  }
+  function sceneFrame(run){
+    if(run!==scene.run)return;
+    var now=nowMs(),dt=Math.min(.25,(now-scene.last)/1000);scene.last=now;
+    if(scene.stage<2)scene.p=Math.max(scene.floor,scene.p+(scene.cap-scene.p)*(1-Math.exp(-dt/(scene.stage===1?6:2.5))));
+    else if(scene.stage===2)scene.p=Math.min(99,scene.p+dt*(100-scene.floor)/(RAMP_MS/1000));
+    sceneShow();
+    var canvas=$("loadingCanvas"),c=canvas.getContext?canvas.getContext("2d"):null;
+    if(c){
+      var dark=window.matchMedia("(prefers-color-scheme: dark)").matches,still=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      var t=(now-scene.t0)/1000,tt=still?Math.floor(t*2)/2:t,d=scene.doneAt?Math.min((now-scene.doneAt)/CHEER_MS,1):0;
+      sDraw(c,tt,scene.p,scene.doneAt?Math.max(d,.01):0,dark?SPAL.dark:SPAL.light);
+    }
+    window.requestAnimationFrame(function(){sceneFrame(run)});
+  }
+  function sceneStart(){
+    var run=scene.run+1,now=nowMs();
+    scene={run:run,stage:0,p:0,floor:0,cap:39.4,shown:-1,t0:now,last:now,doneAt:0};
+    $("loadingText").textContent=SCENE_TEXT[0];sceneShow();
+    if(window.requestAnimationFrame)window.requestAnimationFrame(function(){sceneFrame(run)});
+  }
+  function sceneStop(){scene.run++}
+  // The list can be shown: 100%, the cheer, then done().
+  function sceneFinish(done){
+    clearTimers(load.stall);$("loadingNote").hidden=true;$("loadingRetry").hidden=true;$("loadingSkip").hidden=true;
+    sceneStage(2,Math.max(scene.floor,90),99);
+    loadTimer(load.other,function(){
+      scene.p=100;scene.stage=3;scene.doneAt=nowMs();$("loadingText").textContent=SCENE_TEXT[3];sceneShow();
+      loadTimer(load.other,done,CHEER_MS);
+    },RAMP_MS);
+  }
   function loadTimer(list,fn,ms){var id=setTimeout(fn,ms);list.push(id);return id}
   function clearTimers(list){while(list.length)clearTimeout(list.pop())}
   function hideTopText(){$("topText").hidden=true;$("topRetry").hidden=true;$("topClose").hidden=true}
   function topText(text,retry,close){$("topTextMsg").textContent=text;$("topRetry").hidden=!retry;$("topClose").hidden=!close;$("topText").hidden=false}
   function setBar(pct){
-    var w=pct+"%";$("loadingFill").style.width=w;$("topbarFill").style.width=w;
-    $("loadingBar").setAttribute("aria-valuenow",String(Math.round(pct)));$("topbar").setAttribute("aria-valuenow",String(Math.round(pct)));
+    $("topbarFill").style.width=pct+"%";$("topbar").setAttribute("aria-valuenow",String(Math.round(pct)));
   }
   function showMode(){
     $("loading").className="loader";$("loading").hidden=load.mode!=="screen";
@@ -242,26 +309,25 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   }
   function startLoad(){
     stopLoad();
-    var kept=keptFor(VIEW_DATA);
-    load={on:true,mode:kept&&typeof kept.data==="string"&&kept.data?"bar":"screen",pct:0,cycle:0,heard:false,failed:false,stall:[],other:[]};
-    $("loadingText").textContent="Loading…";$("loadingNote").hidden=true;$("loadingNote").className="lnote";
+    load={on:true,mode:"screen",pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
+    $("loadingNote").hidden=true;$("loadingNote").className="lnote";
     $("loadingRetry").hidden=true;$("loadingSkip").hidden=true;
-    $("loadingHint").textContent=HINTS[Math.floor(Math.random()*HINTS.length)%HINTS.length];$("loadingHint").hidden=false;
-    $("cover").hidden=load.mode!=="bar";setBar(0);showMode();advance(10);
+    $("cover").hidden=true;setBar(0);showMode();sceneStart();advance(10);
   }
   function startBar(cycle){
-    clearTimers(load.stall);clearTimers(load.other);hideTopText();
-    load={on:true,mode:"bar",pct:0,cycle:cycle,heard:true,failed:false,stall:[],other:[]};
+    clearTimers(load.stall);clearTimers(load.other);hideTopText();sceneStop();
+    load={on:true,mode:"bar",pct:0,cycle:cycle,heard:true,failed:false,finale:false,armed:false,stall:[],other:[]};
     setBar(0);showMode();
   }
   function stopLoad(){
-    clearTimers(load.stall);clearTimers(load.other);load.on=false;
+    clearTimers(load.stall);clearTimers(load.other);load.on=false;sceneStop();
     $("loading").hidden=true;$("cover").hidden=true;$("topbar").hidden=true;hideTopText();
   }
   function armStall(){
+    // The screen counts 20 seconds from when it opened, once; the thin bar from its last move.
+    if(load.mode==="screen"){if(!load.armed&&!load.finale){load.armed=true;loadTimer(load.stall,function(){stalled()},STALL_SCREEN_MS)}return}
     clearTimers(load.stall);
-    if(load.mode==="screen")loadTimer(load.stall,function(){stalled()},STALL_SCREEN_MS);
-    else{loadTimer(load.stall,function(){if(load.on&&!load.failed)topText("更新に時間がかかっています",false,false)},SLOW_BAR_MS);loadTimer(load.stall,function(){stalled()},STALL_BAR_MS)}
+    {loadTimer(load.stall,function(){if(load.on&&!load.failed)topText("更新に時間がかかっています",false,false)},SLOW_BAR_MS);loadTimer(load.stall,function(){stalled()},STALL_BAR_MS)}
   }
   function stalled(){
     if(!load.on||load.failed)return;
@@ -271,25 +337,38 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   function advance(pct){
     if(!load.on||load.failed||pct<=load.pct)return;
     load.pct=Math.min(100,pct);setBar(load.pct);
-    if(load.mode==="screen"){$("loadingNote").hidden=true;$("loadingRetry").hidden=true;$("loadingSkip").hidden=true}else hideTopText();
+    if(load.mode!=="screen")hideTopText();
     if(load.pct>=100){finishLoad();return}
     armStall();
   }
-  function finishLoad(){
+  function fadeOut(){
     clearTimers(load.stall);clearTimers(load.other);hideTopText();$("cover").hidden=true;
     $("loading").className="loader fade";$("topbar").className="topbar fade";
-    loadTimer(load.other,function(){load.on=false;$("loading").hidden=true;$("topbar").hidden=true},FADE_MS);
+    loadTimer(load.other,function(){load.on=false;sceneStop();$("loading").hidden=true;$("topbar").hidden=true},FADE_MS);
   }
-  // The kept screen was drawn (from the app's own copy) while the full screen was up: change to the thin bar.
+  function finishLoad(){
+    if(load.mode!=="screen"){fadeOut();return}
+    // During the cheer (a kept screen drawn), the rest of the answer arriving only ends the thin bar before it starts.
+    if(load.finale)return;
+    load.finale=true;sceneFinish(fadeOut);
+  }
+  // The kept screen was drawn (from the app's own copy): the list can be shown. After the cheer, the thin bar while the latest arrives.
   function toBar(){
-    if(load.mode!=="screen")return;
-    load.mode="bar";$("loading").className="loader fade";$("topbar").className="topbar";$("topbar").hidden=false;
-    loadTimer(load.other,function(){$("loading").hidden=true},FADE_MS);armStall();
+    if(load.mode!=="screen"||load.finale)return;
+    load.finale=true;
+    sceneFinish(function(){
+      if(load.pct>=100){fadeOut();return}
+      load.mode="bar";load.finale=false;$("loading").className="loader fade";$("topbar").className="topbar";$("topbar").hidden=false;
+      loadTimer(load.other,function(){sceneStop();$("loading").hidden=true},FADE_MS);
+      if(load.failed){$("topbar").hidden=true;topText("更新できませんでした（前回のデータを表示中）",true,true)}else armStall();
+    });
   }
   function failLoad(texts){
     load.failed=true;clearTimers(load.stall);
+    // The kept screen is already drawn and the small celebration is playing: it is said on the thin bar's line right after.
+    if(load.mode==="screen"&&load.finale)return;
     if(load.mode==="screen"){
-      $("loadingText").textContent="読み込みに失敗しました";$("loadingHint").hidden=true;$("loadingNote").textContent=texts.join("\n");$("loadingNote").className="lnote bad";
+      $("loadingText").textContent="読み込みに失敗しました";$("loadingNote").textContent=texts.join("\n");$("loadingNote").className="lnote bad";
       $("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
     }else{$("topbar").hidden=true;topText("更新できませんでした（前回のデータを表示中）",true,true)}
   }
@@ -316,6 +395,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       else if(parts[p]==="failed"){settled++;var t=typeof errors[p]==="string"?errors[p].slice(0,160):"";if(t)texts.push(t)}
     });
     if(settled===PARTS.length&&done<PARTS.length){failLoad(texts.length?texts:["読み込みに失敗しました。もう一度読み込んでください。"]);return}
+    if(load.mode==="screen"&&!load.finale)sceneStage(1,40+50*done/PARTS.length,89.4);
     advance(50+50*done/PARTS.length);
   }
   $("loadingRetry").onclick=retryLoad;
@@ -477,7 +557,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       // 3.22.0: the app's page is there (30). An older app tells no stages: let the screen go after a short wait.
       $("cover").hidden=true;
       if(legacy)stopLoad();
-      else{advance(30);loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
+      else{advance(30);if(load.mode==="screen"&&!load.finale)sceneStage(1,40,89.4);loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
       if(legacy)pendingOpen=null;
       else if(pendingOpen!==null){toApp({type:"trecard:open",target:pendingOpen});pendingOpen=null}return;
     }
