@@ -39,7 +39,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
    page loads nothing from other sites), so the mark uses the same monospace fallback the app names after IBM Plex Mono. */
 :root{--ground:#F2F1ED;--ink:#15161A;--ink-fg:#FFFFFF;--lsub:#62636A;--track:#E4E2DC;--lerr:#B4381C}
 @media (prefers-color-scheme: dark){:root{--ground:#121315;--ink:#ECEBE7;--ink-fg:#121315;--lsub:#A3A3A8;--track:#2A2B2F;--lerr:#F07152}}
-.loader{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--ground);color:var(--ink);opacity:1;transition:opacity .3s ease}
+.loader{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));background:var(--ground);color:var(--ink);opacity:1;transition:opacity .2s ease}
 .lbox{width:100%;max-width:330px;text-align:center}
 /* 3.45.1: the pixel-art loader (docs/design/loader-reference.html). 80x60 shown three times over; its own colors match its canvas. */
 .loader{background:#F3F1EC}
@@ -121,7 +121,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   var FRAME_ORIGIN_RE=/^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
   var $=function(id){return document.getElementById(id)};
   var standalone=window.navigator.standalone===true||window.matchMedia("(display-mode: standalone)").matches;
-  var timer=0,ready=false,appNonce="",bootError="";
+  var timer=0,ready=false,readyHandled=false,appNonce="",bootError="";
 
   function read(key){try{return window.localStorage.getItem(key)}catch(e){return null}}
   function write(key,value){try{window.localStorage.setItem(key,value);return window.localStorage.getItem(key)===value}catch(e){return false}}
@@ -186,7 +186,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);
       appNonce=Array.from(bytes,function(b){return b.toString(16).padStart(2,"0")}).join("");
     }catch(e){fail("開けませんでした","安全な接続を準備できませんでした。ブラウザを更新してから再度開いてください。",false);return}
-    ready=false;bootError="";show(null);startLoad();
+    ready=false;readyHandled=false;bootError="";show(null);startLoad();
     var frame=$("frame");frame.hidden=false;
     frame.src=config.u+"?key="+encodeURIComponent(config.k)+"&wrapperNonce="+appNonce;
     clearTimeout(timer);
@@ -214,8 +214,10 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   // The app tells the stages with trecard:progress (nonce-checked like every other message). An app that never sends
   // one (an older Apps Script page) is let go LEGACY_WAIT_MS after its ready, so the screen is never left behind.
   // 3.23.0: the thin bar says it is slow after 10 seconds (was 5) and offers 「再読み込み」 after 20 (was 10).
-  var STALL_SCREEN_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=300,RAMP_MS=320,CHEER_MS=1000,PARTS=["entries","manual","retail"];
-  var load={on:false,pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
+  // 3.47.0: after the data, about a second in all (was 1.6): the 100%, the smile, the fade. One state: load.failed (the texts), load.slow, load.finale; renderLoad draws the words and buttons from it.
+  var STALL_SCREEN_MS=20000,LEGACY_WAIT_MS=2000,FADE_MS=200,RAMP_MS=200,CHEER_MS=600,PARTS=["entries","manual","retail"];
+  function newLoad(){return {on:true,pct:0,cycle:0,heard:false,failed:null,slow:false,finale:false,armed:false,stall:[],other:[]}}
+  var load={on:false,pct:0,cycle:0,heard:false,failed:null,slow:false,finale:false,armed:false,stall:[],other:[]};
   // The picture: drawing code from docs/design/loader-reference.html (the decided version), on a canvas of 80x60.
   var SW=80,SH=60,SN=10,SCW=6,SCH=9,SX0=Math.round((SW-(SN*SCW+(SN-1)))/2);
   var SPAL={light:{bg:"#F3F1EC",line:"#1D1C1A",paper:"#FFFDF7",shade:"#D9D4C8",red:"#D9473D",blue:"#3C6FD8",yellow:"#F2B632",pink:"#F08BB0",green:"#3FAE6A",mute:"#B8B2A5",slot:"#C9C3B6"},
@@ -267,7 +269,14 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       var t=(now-scene.t0)/1000,tt=still?Math.floor(t*2)/2:t,d=scene.doneAt?Math.min((now-scene.doneAt)/CHEER_MS,1):0;
       sDraw(c,tt,scene.p,scene.doneAt?Math.max(d,.01):0,dark?SPAL.dark:SPAL.light);
     }
+    // 3.47.0: during an error the picture stands still.
+    if(load.failed){scene.frozen=true;return}
     window.requestAnimationFrame(function(){sceneFrame(run)});
+  }
+  function sceneResume(){
+    if(!scene.frozen)return;
+    scene.frozen=false;scene.last=nowMs();var run=scene.run;
+    if(window.requestAnimationFrame)window.requestAnimationFrame(function(){sceneFrame(run)});
   }
   function sceneStart(){
     var run=scene.run+1,now=nowMs();
@@ -278,7 +287,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   function sceneStop(){scene.run++}
   // The list can be shown: 100%, the cheer, then done().
   function sceneFinish(done){
-    clearTimers(load.stall);$("loadingNote").hidden=true;$("loadingRetry").hidden=true;$("loadingSkip").hidden=true;
+    clearTimers(load.stall);renderLoad();
     sceneStage(2,Math.max(scene.floor,90),99);
     loadTimer(load.other,function(){
       scene.p=100;scene.stage=3;scene.doneAt=nowMs();$("loadingText").textContent=SCENE_TEXT[3];sceneShow();
@@ -289,10 +298,17 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   function clearTimers(list){while(list.length)clearTimeout(list.pop())}
   function startLoad(){
     stopLoad();
-    load={on:true,pct:0,cycle:0,heard:false,failed:false,finale:false,armed:false,stall:[],other:[]};
-    $("loadingNote").hidden=true;$("loadingNote").className="lnote";
-    $("loadingRetry").hidden=true;$("loadingSkip").hidden=true;
+    load=newLoad();
+    renderLoad();
     $("loading").className="loader";$("loading").hidden=false;sceneStart();advance(10);
+  }
+  // The words and the buttons, from the state, whenever it changes. 「このまま開く」 only when the app's page is there to open.
+  function renderLoad(){
+    var problem=!load.finale&&(load.failed||load.slow);
+    $("loadingNote").hidden=!problem;$("loadingNote").className=load.failed?"lnote bad":"lnote";
+    $("loadingNote").textContent=load.failed?load.failed.join("\n"):load.slow?"時間がかかっています":"";
+    $("loadingRetry").hidden=!problem;$("loadingSkip").hidden=!(problem&&ready&&app);
+    if(load.failed)$("loadingText").textContent="読み込みに失敗しました";
   }
   function stopLoad(){
     clearTimers(load.stall);clearTimers(load.other);load.on=false;sceneStop();
@@ -304,7 +320,7 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   }
   function stalled(){
     if(!load.on||load.failed)return;
-    $("loadingNote").textContent="時間がかかっています";$("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
+    load.slow=true;renderLoad();
   }
   function advance(pct){
     if(!load.on||load.failed||pct<=load.pct)return;
@@ -322,9 +338,15 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     load.finale=true;sceneFinish(fadeOut);
   }
   function failLoad(texts){
-    load.failed=true;clearTimers(load.stall);
-    $("loadingText").textContent="読み込みに失敗しました";$("loadingNote").textContent=texts.join("\n");$("loadingNote").className="lnote bad";
-    $("loadingNote").hidden=false;$("loadingRetry").hidden=false;$("loadingSkip").hidden=!ready;
+    load.failed=texts;clearTimers(load.stall);renderLoad();
+  }
+  // The failure panel was up (no answer in time) and the app's page answered after all: back to the screen, to wait for the latest data.
+  function resumeLoad(){
+    stopLoad();load=newLoad();load.armed=true;
+    renderLoad();
+    $("loading").className="loader";$("loading").hidden=false;sceneStart();
+    load.pct=30;sceneStage(1,40,89.4);
+    loadTimer(load.stall,function(){stalled()},STALL_SCREEN_MS);
   }
   function retryLoad(){
     var c=stored();if(c)openApp(c);else showSetup("");
@@ -335,7 +357,12 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
     var cycle=Number(data.cycle);if(!Number.isInteger(cycle)||cycle<0||cycle>100000)return;
     load.heard=true;
     if(!load.on||cycle<load.cycle)return;
-    if(cycle>load.cycle){if(load.failed||load.pct>=100)return;load.cycle=cycle}
+    if(cycle>load.cycle){
+      if(load.pct>=100)return;
+      load.cycle=cycle;
+      // A new reading after a failure: the screen waits for it again.
+      if(load.failed){load.failed=null;$("loadingText").textContent=SCENE_TEXT[scene.stage];renderLoad();sceneResume()}
+    }
     var parts=data.parts&&typeof data.parts==="object"?data.parts:{},errors=data.errors&&typeof data.errors==="object"?data.errors:{};
     if(cycle>0)advance(50);
     if(cycle<1)return;
@@ -382,7 +409,8 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
   var pushKey="",pendingOpen=null,subscribeOperation=null,pushQueue=Promise.resolve();
   var pushSupported=function(){return "serviceWorker" in navigator&&"PushManager" in window&&"Notification" in window};
   if(standalone&&"serviceWorker" in navigator){try{navigator.serviceWorker.register("sw.js").catch(function(){})}catch(e){}}
-  function toApp(message){if(!app||!appNonce)return;try{app.source.postMessage(Object.assign({},message,{nonce:appNonce}),app.origin)}catch(e){}}
+  // 3.47.0: an older page is not given the nonce (it did not show it has it, and it drops a reply carrying one).
+  function toApp(message){if(!app||!appNonce)return;try{app.source.postMessage(app.legacy?message:Object.assign({},message,{nonce:appNonce}),app.origin)}catch(e){}}
   function pushBinding(){return app&&!app.legacy&&appNonce?{app:app,nonce:appNonce}:null}
   function currentBinding(binding){return !!binding&&app===binding.app&&appNonce===binding.nonce&&!app.legacy}
   function operation(data,binding){return {action:data.action,id:data.operationId,binding:binding||pushBinding(),replied:false,cancelled:false,started:false}}
@@ -499,12 +527,15 @@ input{box-sizing:border-box;width:100%;min-height:48px;padding:10px 12px;border:
       return;
     }
     if(!data||data.type!=="trecard:ready")return;
+    // 3.47.0: one launch handles one authenticated ready: a second one neither sends things again nor raises an older page.
+    if(data.state==="app"){if(readyHandled)return;readyHandled=true}
+    var wasFailed=!$("failed").hidden;
     ready=true;clearTimeout(timer);
     if(data.state==="app"){
       app={source:event.source,origin:event.origin,legacy:legacy};sendLayout();if(!legacy){sendKept();var status=operation({action:"status",operationId:0});enqueueMutation(function(){return sendPushState(status)})}show(null);
       // 3.22.0: the app's page is there (30). An older app tells no stages: let the screen go after a short wait.
       if(legacy)stopLoad();
-      else{advance(30);if(!load.finale)sceneStage(1,40,89.4);loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
+      else{if(wasFailed||!load.on)resumeLoad();advance(30);if(!load.finale)sceneStage(1,40,89.4);renderLoad();loadTimer(load.other,function(){if(load.on&&!load.heard)finishLoad()},LEGACY_WAIT_MS)}
       if(legacy)pendingOpen=null;
       else if(pendingOpen!==null){toApp({type:"trecard:open",target:pendingOpen});pendingOpen=null}return;
     }
